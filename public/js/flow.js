@@ -66,7 +66,7 @@
         text('source-location', '');
         code.replaceChildren(document.createElement('code'));
 
-        if (file === 'database') {
+        if (files[file].binary) {
             code.firstChild.textContent = 'SQLite é um arquivo binário. A consulta executada e seus parâmetros aparecem nos detalhes desta etapa.';
             return;
         }

@@ -2,6 +2,8 @@
 
 Este roteiro acompanha o Bloco 4 de `roteiro-apresentacao.md` e utiliza a aplicação descrita em `spec.md`. O foco é uma requisição GET completa, conectando as três demonstrações de padrões ao CRUD.
 
+O cenário local abaixo usa SQLite. Se apresentar a versão hospedada na Vercel, o banco é PostgreSQL, as sessões/cache são compartilhadas no banco e os logs ficam no painel da Vercel. O `/fluxo` se adapta ao driver configurado. As instruções de implantação estão na seção Publicar na Vercel do README.
+
 ## Preparação antes da apresentação
 
 - Deixe a aplicação funcionando com `php artisan serve --host=127.0.0.1 --port=8000` e abra http://127.0.0.1:8000/tasks.
@@ -75,7 +77,7 @@ php artisan tinker --execute 'dump(\App\Models\Task::query()->where("completed",
 php artisan test --compact tests/Feature/TaskManagementTest.php
 ```
 
-Resultado verificado da suíte completa: **50 testes aprovados, 276 verificações**, incluindo 16 testes do painel em `tests/Feature/RequestFlowTest.php`. O comando acima executa os 34 testes do CRUD; para todos, utilize `php artisan test --compact`. Os testes usam SQLite em memória e não apagam o banco da apresentação.
+Resultado verificado da suíte completa: **57 testes aprovados, 322 verificações**, incluindo 16 testes do painel e sete de persistência para a nuvem. O comando acima executa os 34 testes do CRUD; para todos, utilize `php artisan test --compact`. A suíte passou com SQLite e PostgreSQL em bancos isolados, sem apagar o banco da apresentação.
 
 ## Diagrama para acompanhar GET /tasks
 

@@ -39,6 +39,16 @@ class RequestTrace
 
     private array $trace = [];
 
+    public static function files(): array
+    {
+        $files = self::FILES;
+        $sqlite = config('database.default') === 'sqlite';
+        $files['database']['path'] = $sqlite ? 'database/database.sqlite' : 'config/database.php';
+        $files['database']['binary'] = $sqlite;
+
+        return $files;
+    }
+
     public function begin(Request $request): void
     {
         $this->active = true;
@@ -114,9 +124,11 @@ class RequestTrace
 
         if ($request->hasSession()) {
             $key = $this->key($request);
-            $history = Cache::get($key, []);
-            array_unshift($history, $this->trace);
-            Cache::put($key, array_slice($history, 0, 20), now()->addHour());
+            Cache::lock($key.'.lock', 10)->block(5, function () use ($key): void {
+                $history = Cache::get($key, []);
+                array_unshift($history, $this->trace);
+                Cache::put($key, array_slice($history, 0, 20), now()->addHour());
+            });
         }
     }
 
@@ -133,8 +145,9 @@ class RequestTrace
 
     public function source(string $file, ?string $method): array
     {
-        abort_unless(isset(self::FILES[$file]) && $file !== 'database', 404);
-        $path = self::FILES[$file]['path'];
+        $files = self::files();
+        abort_unless(isset($files[$file]) && ! ($files[$file]['binary'] ?? false), 404);
+        $path = $files[$file]['path'];
         abort_unless(is_file(base_path($path)), 404);
         $lines = file(base_path($path), FILE_IGNORE_NEW_LINES);
         $target = null;

@@ -2,7 +2,7 @@
 
 Prova de conceito para a disciplina de **Análise e Projeto de Sistemas de Informação do IFAL**. O projeto implementa um gerenciador de tarefas e torna visíveis o MVC com uma camada Service, o fluxo HTTP do Laravel e três mecanismos: **Dependency Injection / IoC**, **Active Record** e **Proxy por meio das Facades**.
 
-A aplicação usa Blade no servidor, SQLite e CSS próprio. Não é necessário instalar Node ou compilar assets para executá-la. Os documentos de entrada `spec.md` e `roteiro-apresentacao.md` foram preservados.
+A aplicação usa Blade no servidor e CSS próprio, com SQLite na configuração local e PostgreSQL na Vercel. Não é necessário instalar Node ou compilar assets para executá-la. Os documentos de entrada `spec.md` e `roteiro-apresentacao.md` foram preservados.
 
 ## Tecnologias e requisitos
 
@@ -13,6 +13,7 @@ Versões verificadas durante a implementação:
 | PHP | 8.5.8 |
 | Laravel, Eloquent e Blade | 13.44.1 |
 | SQLite, biblioteca do PHP | 3.53.4 |
+| PostgreSQL usado nos testes de produção | 18.6 |
 | Composer | 2.10.2 |
 | PHPUnit | 12.5.45 |
 | Laravel Pint | 1.32.3 |
@@ -64,7 +65,7 @@ php artisan db:seed
 php artisan migrate:status
 ```
 
-O seeder usa `TaskFactory` e títulos fixos. Em um banco limpo são criadas cinco tarefas: duas concluídas e três pendentes. Executá-lo novamente não duplica os exemplos cujos títulos continuam iguais nem redefine seus estados. O cache do total é invalidado ao final.
+O seeder usa valores explícitos e títulos fixos, funcionando também sem dependências de desenvolvimento. `TaskFactory` continua disponível para os testes. Em um banco limpo são criadas cinco tarefas: duas concluídas e três pendentes. Executá-lo novamente não duplica os exemplos cujos títulos continuam iguais nem redefine seus estados. O cache do total é invalidado ao final.
 
 Para restaurar exatamente o cenário inicial da apresentação, **apagando todas as tarefas atuais**:
 
@@ -72,7 +73,88 @@ Para restaurar exatamente o cenário inicial da apresentação, **apagando todas
 php artisan migrate:fresh --seed
 ```
 
-Somente a tabela de domínio `tasks` é criada, além da tabela `migrations` administrada pelo Laravel. Cache e sessões ficam em `storage/framework/`.
+A tabela de domínio é `tasks`. As migrations também preparam `cache`, `cache_locks` e `sessions` para o armazenamento compartilhado na Vercel, além da tabela `migrations` administrada pelo Laravel. Na configuração local, cache e sessões continuam usando arquivos em `storage/framework/`.
+
+## Publicar na Vercel
+
+A implantação usa o [Container Runtime da Vercel](https://vercel.com/docs/functions/runtimes/container), com FrankenPHP e PHP 8.5. O uso de Docker e PostgreSQL nesta opção atende à adaptação solicitada para hospedagem; a configuração local original continua disponível.
+
+### Arquivos de implantação
+
+| Arquivo | Função |
+| --- | --- |
+| `Dockerfile` | Instala extensões PHP e dependências com `--no-dev`, e monta a imagem de produção. |
+| `Caddyfile` | Atende HTTP na porta `PORT` (padrão 80) e publica somente `/app/public`. |
+| `docker-entrypoint.sh` | Prepara diretórios temporários e gera caches após receber as variáveis de ambiente. |
+| `.dockerignore` | Exclui `.env`, credenciais, SQLite local, logs e dependências locais da imagem. |
+| `.env.vercel.example` | Modelo das variáveis de produção, sem credenciais. |
+
+Tarefas, sessões, cache, locks e histórico do painel ficam no PostgreSQL. `/tmp` contém somente arquivos descartáveis, como Views compiladas e manifests do Laravel/Caddy. A escrita no histórico utiliza um lock compartilhado para não perder registros de requisições simultâneas. Consultas internas de sessão/cache são excluídas das etapas de tarefas.
+
+### 1. Preparar o PostgreSQL e as variáveis
+
+Crie ou conecte um PostgreSQL na [Vercel Marketplace](https://vercel.com/marketplace?category=databases). Copie a URL fornecida pelo serviço para `DB_URL`, inclusive parâmetros de TLS/pooling quando presentes. Se a integração criar `DATABASE_URL` ou `POSTGRES_URL`, copie esse valor para `DB_URL`.
+
+Crie um arquivo local exclusivo para preparar esse banco, sem substituir o `.env` de desenvolvimento:
+
+```sh
+cp .env.vercel.example .env.vercel.local
+php artisan key:generate --show
+```
+
+Preencha `.env.vercel.local` com os valores reais:
+
+- `APP_KEY`: a chave `base64:...` gerada pelo comando; mantenha a mesma nos próximos deployments.
+- `APP_URL`: o endereço HTTPS do projeto, por exemplo o domínio que você escolheu na Vercel.
+- `DB_URL`: a conexão PostgreSQL completa.
+
+Mantenha os demais valores do modelo: `APP_DEBUG=false`, `DB_SSLMODE=require`, `SESSION_DRIVER=database`, `SESSION_ENCRYPT=true`, `SESSION_SECURE_COOKIE=true`, `CACHE_STORE=database`, `LOG_CHANNEL=stderr` e `TRUSTED_PROXIES=*`. O trust de proxies é necessário para reconhecer o HTTPS encerrado pela infraestrutura da Vercel; ele não é ativado no `.env.example` local.
+
+O `.env.vercel.local` é ignorado pelo Git e pela imagem Docker. A URL do banco e a chave devem ficar nos arquivos locais privados e nas variáveis do projeto, nunca em commits ou no Dockerfile.
+
+### 2. Criar as tabelas antes de atender requisições
+
+Com PHP/Composer instalados localmente e a extensão `pdo_pgsql` habilitada:
+
+```sh
+php artisan migrate --env=vercel.local --force
+# Opcional: criar os cinco exemplos da apresentação.
+php artisan db:seed --env=vercel.local --force
+```
+
+Esses comandos usam exclusivamente a conexão de `.env.vercel.local`. As migrations não são executadas em cada cold start ou build: execute-as novamente quando houver novas migrations. O seeder é opcional e também funciona numa instalação sem Faker/Boost/PHPUnit. O SQLite local não é enviado nem importado automaticamente para o PostgreSQL.
+
+### 3. Configurar o projeto na Vercel
+
+Envie os arquivos do projeto ao repositório e importe-o na Vercel, ou ajuste o projeto já existente:
+
+| Campo | Valor |
+| --- | --- |
+| Root Directory | `./`, a pasta que contém `Dockerfile`, `composer.json` e `artisan` |
+| Framework Preset | `Container` |
+| Build Command / Output Directory | Deixe as opções padrão do Container; o build é definido pelo Dockerfile. |
+| Porta HTTP | 80, ou o valor de `PORT` se você alterar a porta. |
+
+Em **Settings → Environment Variables**, cadastre os valores de `.env.vercel.local` no ambiente Production. Depois execute o deploy/redeploy. O Dockerfile na raiz é suficiente para o Container Runtime; não é necessário um runtime PHP comunitário ou um `vercel.json` para esta aplicação. [Guia oficial de PHP com Docker](https://vercel.com/kb/guide/deploy-php-on-vercel-with-docker).
+
+Utilize um PostgreSQL/banco separado para Preview e configure suas respectivas variáveis, evitando que a demonstração de uma branch modifique os dados de Production.
+
+### 4. Conferir a implantação
+
+Abra `/up` (saúde do processo), `/tasks` (banco, sessão e Blade) e `/fluxo` (painel). Crie uma tarefa e confira a requisição em outra aba. Na Vercel o painel identifica **PostgreSQL** e mostra `config/database.php` como arquivo de conexão; o código-fonte contém referências a variáveis de ambiente, sem revelar seus valores.
+
+Os registros `Task created`, `Task updated`, `Task status changed` e `Task deleted` aparecem nos logs de execução da Vercel, enviados por `stderr`. A chave `APP_KEY` estável e o armazenamento compartilhado mantêm a sessão e o histórico entre instâncias/deployments.
+
+Para conferir a imagem localmente quando o Docker estiver em execução:
+
+```sh
+docker build -t ifal-task-manager .
+docker run --rm --env-file .env.vercel.local -e SESSION_SECURE_COOKIE=false -e APP_URL=http://localhost:8000 -p 8000:80 ifal-task-manager
+```
+
+Os dois overrides são somente para testar via HTTP local; mantenha cookies seguros e HTTPS no ambiente Vercel. Os comandos não executam migrations automaticamente.
+
+**Validação realizada:** suíte completa com SQLite e PostgreSQL; instalação `--no-dev`, migrations, seeders e HTTP numa cópia com arquivos da aplicação sem permissão de escrita e diretórios temporários separados. O build da imagem Docker e um deploy real não foram executados: o daemon Docker não estava em execução e a conexão PostgreSQL/chave do projeto Vercel ainda dependem de configuração na conta.
 
 ## Testes e verificações
 
@@ -87,9 +169,9 @@ composer check-platform-reqs
 php artisan route:list --path=tasks
 ```
 
-Os **50 casos de teste, com 276 verificações**, cobrem listagem e ordem, cadastro pendente, limites e tipos inválidos do título, edição, conclusão e reabertura, exclusão, filtros, estado vazio, 404, mensagens flash, escape de HTML, rejeição de escritas sem token no cenário testado, logs, duração e invalidação do cache e repetição do seeder. Incluem 16 testes do painel: captura de etapas e SQL, redirecionamentos separados, validação interrompida, cache hit/miss, isolamento por sessão, expiração, limite do histórico, leitura restrita de fontes e preservação das mensagens flash durante o polling.
+Os **57 casos de teste, com 322 verificações**, cobrem listagem e ordem, cadastro pendente, limites e tipos inválidos do título, edição, conclusão e reabertura, exclusão, filtros, estado vazio, 404, mensagens flash, escape de HTML, rejeição de escritas sem token no cenário testado, logs, duração e invalidação do cache e repetição do seeder. Incluem 16 testes do painel e sete de persistência para a nuvem: armazenamento em banco, recarregamento de sessões/cache, preservação do feedback, captura somente do SQL de tarefas, fonte PostgreSQL e URLs/cookies HTTPS.
 
-A suíte usa PHPUnit, `RefreshDatabase`, SQLite em memória, cache e sessões em memória. O banco da apresentação permanece separado. O teste de CSRF remove explicitamente o desvio que o framework aplica ao ambiente de testes.
+A suíte usa PHPUnit e `RefreshDatabase`; por padrão, SQLite em memória e cache/sessões em memória. Os testes de nuvem exercitam os drivers de banco no mesmo banco isolado da suíte. A suíte completa também foi executada em PostgreSQL 18.6 temporário, com o mesmo resultado. O banco da apresentação permanece separado. O teste de CSRF remove explicitamente o desvio que o framework aplica ao ambiente de testes.
 
 Também foram verificadas respostas HTTP reais: redirecionamento da raiz (302), listagem, filtros, edição e assets (200), tarefa inexistente (404) e cadastro sem token CSRF (419). O painel foi exercitado no Firefox 160 em duas abas: chegada automática de requisições, código-fonte, SQL, pausa, avanço, repetição e layouts de 1440 e 390 pixels, sem erros de JavaScript.
 
@@ -118,7 +200,7 @@ bootstrap/
 └── providers.php
 database/
 ├── factories/TaskFactory.php
-├── migrations/2026_11_25_164538_create_tasks_table.php
+├── migrations/ (tasks, cache, cache_locks e sessions)
 └── seeders/DatabaseSeeder.php
 docs/
 └── APRESENTACAO.md
@@ -135,6 +217,11 @@ resources/views/
 routes/web.php
 tests/Feature/TaskManagementTest.php
 tests/Feature/RequestFlowTest.php
+tests/Feature/CloudPersistenceTest.php
+Dockerfile
+Caddyfile
+docker-entrypoint.sh
+.env.vercel.example
 ```
 
 ## Arquitetura e padrões de projeto
@@ -175,7 +262,7 @@ Route Model Binding fornece `Task $task` nas ações de registros existentes e r
 3. O Router identifica a rota em `routes/web.php` e aplica os middlewares da rota/grupo `web`, incluindo sessão. A proteção contra falsificação de requisição se aplica às escritas.
 4. O container fornece o Controller e sua dependência `TaskService`.
 5. `index()` valida o filtro, registra o início e chama `listTasks()`.
-6. O Eloquent consulta o SQLite e hidrata os modelos. O Controller registra a quantidade retornada. `totalTasks()` obtém o total do cache ou executa `Task::count()`.
+6. O Eloquent consulta o banco configurado (SQLite local ou PostgreSQL na Vercel) e hidrata os modelos. O Controller registra a quantidade retornada. `totalTasks()` obtém o total do cache ou executa `Task::count()`.
 7. O Controller devolve `tasks.index`; Blade renderiza os dados no layout.
 8. A resposta HTML atravessa a saída do pipeline de middleware e chega ao navegador.
 
@@ -190,13 +277,13 @@ flowchart TD
     G --> H["TaskController::index"]
     H --> I["TaskService::listTasks"]
     I --> J["Task / Eloquent"]
-    J --> K[("SQLite: tasks")]
+    J --> K[("SQLite local / PostgreSQL na Vercel: tasks")]
     K --> J
     J --> I
     I --> H
     H --> L["TaskService::totalTasks"]
     L --> M["Cache::remember: tasks.total"]
-    M --> N["Cache em arquivo / COUNT em cache miss"]
+    M --> N["Cache em arquivo ou banco / COUNT em cache miss"]
     N --> L
     L --> H
     H --> O["Blade: tasks.index e layouts.app"]
@@ -220,7 +307,7 @@ O painel exibe método, URL, rota, status, tempo observado, trechos reais de cla
 
 **Limite didático:** a animação reproduz os marcos capturados depois que a resposta termina; não é um debugger nem registra todas as chamadas internas. Entrada e bootstrap, anteriores ao middleware de captura, aparecem identificados como ilustrativos. O tempo observado começa nesse middleware e não representa uma medição completa de desempenho. Um POST/PUT/PATCH/DELETE com resposta 302 e o GET seguinte aparecem como requisições distintas. Um erro de validação não inventa uma passagem pelo Service ou pelo banco.
 
-O código é lido somente de uma lista fixa de arquivos relevantes do projeto e do framework; caminhos arbitrários e `.env` não são aceitos. O SQLite é mostrado como nó de dados com SQL, sem tentar renderizar seu conteúdo binário.
+O código é lido somente de uma lista fixa de arquivos relevantes do projeto e do framework; caminhos arbitrários e `.env` não são aceitos. Localmente, SQLite é mostrado como nó binário com SQL. Na Vercel, o nó mostra `config/database.php` e o SQL do PostgreSQL. Consultas de cache e sessão não são apresentadas como operações de tarefas.
 
 ### Logs no terminal
 
@@ -251,4 +338,4 @@ Documentação da versão 13 utilizada na implementação:
 - [Validação e Form Requests](https://laravel.com/docs/13.x/validation)
 - [Testes HTTP](https://laravel.com/docs/13.x/http-tests)
 
-O projeto é destinado à apresentação local, sem autenticação. O servidor Artisan e o modo debug do `.env.example` são configurações de desenvolvimento.
+O projeto é destinado à demonstração acadêmica, sem autenticação. O servidor Artisan e o modo debug do `.env.example` são configurações de desenvolvimento; a implantação Vercel usa o servidor FrankenPHP e debug desativado.

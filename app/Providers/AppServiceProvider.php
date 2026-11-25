@@ -44,7 +44,7 @@ class AppServiceProvider extends ServiceProvider
 
         DB::listen(function (QueryExecuted $query): void {
             $trace = app(RequestTrace::class);
-            if (! $trace->isRecording()) {
+            if (! $trace->isRecording() || ! preg_match('/\b(?:from|into|update|join)\s+["`]?tasks\b/i', $query->sql)) {
                 return;
             }
 
@@ -59,7 +59,13 @@ class AppServiceProvider extends ServiceProvider
                 default => 'query',
             };
             $trace->record('eloquent', $method, 'O Eloquent executou uma operação de persistência.', 'Active Record');
-            $trace->record('database', null, 'Consulta realmente executada no SQLite.', details: [
+            $database = match ($query->connection->getDriverName()) {
+                'pgsql' => 'PostgreSQL',
+                'sqlite' => 'SQLite',
+                default => $query->connection->getDriverName(),
+            };
+            $trace->record('database', null, 'Consulta realmente executada no '.$database.'.', details: [
+                'conexão' => $query->connectionName,
                 'SQL' => $query->sql,
                 'parâmetros' => $query->bindings,
                 'tempo SQL (ms)' => $query->time,

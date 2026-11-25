@@ -30,7 +30,7 @@
 
         <footer class="site-footer">
             <span>Análise e Projeto de Sistemas de Informação</span>
-            <span>Laravel · SQLite · Blade</span>
+            <span>Laravel · {{ ['sqlite' => 'SQLite', 'pgsql' => 'PostgreSQL'][config('database.default')] ?? config('database.default') }} · Blade</span>
         </footer>
     </div>
 </body>

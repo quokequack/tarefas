@@ -14,7 +14,8 @@ class RequestFlowController extends Controller
     public function index(): View
     {
         $tree = [];
-        foreach (RequestTrace::FILES as $id => $file) {
+        $files = RequestTrace::files();
+        foreach ($files as $id => $file) {
             $branch = &$tree;
             $parts = explode('/', $file['path']);
             foreach ($parts as $index => $name) {
@@ -27,7 +28,7 @@ class RequestFlowController extends Controller
             unset($branch);
         }
 
-        return view('flow.index', ['files' => RequestTrace::FILES, 'tree' => $tree]);
+        return view('flow.index', ['files' => $files, 'tree' => $tree]);
     }
 
     public function events(Request $request): JsonResponse

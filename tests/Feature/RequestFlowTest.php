@@ -222,9 +222,12 @@ class RequestFlowTest extends TestCase
 
     public function test_only_allowlisted_text_files_can_be_read(): void
     {
-        foreach (['env', 'composer', 'database', 'unknown'] as $file) {
+        foreach (['env', 'composer', 'unknown'] as $file) {
             $this->getJson(route('flow.source', ['file' => $file]))->assertNotFound();
         }
+
+        $this->getJson(route('flow.source', ['file' => 'database']))
+            ->assertStatus(config('database.default') === 'sqlite' ? 404 : 200);
 
         $this->getJson('/fluxo/arquivos/entry?method[]=store')->assertUnprocessable();
         $this->getJson('/fluxo/arquivos/entry?path=.env')->assertOk()->assertJsonPath('path', 'public/index.php');

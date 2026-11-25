@@ -24,10 +24,10 @@ class DatabaseSeeder extends Seeder
         foreach ($examples as $index => $example) {
             Task::firstOrCreate(
                 ['title' => $example['title']],
-                Task::factory()->raw([
+                [
                     ...$example,
                     'created_at' => now()->subMinutes(count($examples) - $index),
-                ]),
+                ],
             );
         }
 
